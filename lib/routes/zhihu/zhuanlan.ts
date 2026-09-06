@@ -15,10 +15,10 @@ export const route: Route = {
         requireConfig: [
             {
                 name: 'ZHIHU_COOKIES',
-                description: '',
+                description: 'A complete d_c0 and __zse_ck cookie pair avoids browser-based session initialization. Otherwise Playwright (BROWSER on Workers) is required.',
             },
         ],
-        requirePuppeteer: false,
+        requirePuppeteer: true,
         antiCrawler: true,
         supportBT: false,
         supportPodcast: false,
