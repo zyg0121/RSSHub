@@ -2,13 +2,19 @@ import { load } from 'cheerio';
 import pMap from 'p-map';
 
 import type { ListingExtra } from '@/routes/temposmart/utils';
-import { clean, normalizeFloor, parseArea, parseCondition, parseJpy, parseWalkMin, parseWard, summarize, tsuboUnit } from '@/routes/temposmart/utils';
+import { clean, normalizeFloor, parseArea, parseCondition, parseHeavyFood, parseJpy, parseWalkMin, parseWard, summarize, tsuboUnit } from '@/routes/temposmart/utils';
 import type { Data, DataItem, Route } from '@/types';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
 import ofetch from '@/utils/ofetch';
 
 const HOST = 'https://bukenavi.jp';
+/**
+ * `initMap()` pins the map at the listing's own coordinates — googleMap('map', 区名, lat, lng, false).
+ * The label is only the ward, but the pin is per-property: five 歌舞伎町 listings carry five different
+ * pairs spread over ~265m × 440m, so this is finer than the 丁目 the 住所 field withholds.
+ */
+const MAP_CALL = /googleMap\(\s*'[^']*',\s*'[^']*',\s*'([\d.-]+)',\s*'([\d.-]+)'/;
 const DETAIL_CONCURRENCY = 2;
 
 const REGIONS = [
@@ -44,6 +50,8 @@ interface DetailFields {
     business_types: string | null; // 業種（可能）
     ng_business: string | null; // 不可業態
     note: string | null; // 特記事項
+    lat: string | null; // map pin, per-property
+    lng: string | null;
 }
 
 /**
@@ -127,6 +135,8 @@ const parseDetail = (html: string): DetailFields => {
         address: cell('住所'),
         line: cell('沿線'),
         area: cell('面積'),
+        lat: MAP_CALL.exec(html)?.[1] ?? null,
+        lng: MAP_CALL.exec(html)?.[2] ?? null,
         prev_business: cell('前の業態'),
         business_types: cell('業種'),
         ng_business: cell('不可業態'),
@@ -143,11 +153,14 @@ const mergeDetail = (base: ListingExtra, d: DetailFields): ListingExtra => {
         area_m2: area_m2 ?? base.area_m2,
         line: base.line ?? d.line,
         prev_business: d.prev_business,
-        heavy_food_ok: d.ng_business === null ? null : !/飲食/.test(d.ng_business),
+        // Only an explicit 重飲食可 / 不可 counts. An NG list that does not use the word 飲食 is not a
+        // yes: '中華・焼肉・焼き鳥・油の多い業態不可' is a heavy-food ban written out in full, and
+        // '風営法不可' is about something else entirely. Both used to come through as `true`.
+        heavy_food_ok: parseHeavyFood(d.ng_business, d.business_types),
         business_limit: limitParts.length > 0 ? limitParts.join(' / ') : null,
         ward: parseWard(address),
         address_hint: address,
-        raw: { ...base.raw, address: d.address, line: d.line, area: d.area, prev_business: d.prev_business, business_types: d.business_types, ng_business: d.ng_business, note: d.note },
+        raw: { ...base.raw, address: d.address, line: d.line, area: d.area, prev_business: d.prev_business, business_types: d.business_types, ng_business: d.ng_business, note: d.note, lat: d.lat, lng: d.lng },
     };
 };
 
@@ -235,6 +248,8 @@ export const route: Route = {
         },
     },
     description: `New 居抜き listings on ぶけなび that are currently 募集中，newest first (first page, 10 listings) — for a region, a prefecture, or one 市区町村 when \`city\` is given. Each item's \`_extra\` carries the structured listing fields (賃料，坪，坪単価，階，最寄駅，前業態，業種制限，…) parsed from the list and detail pages; unknown values are \`null\`. The site does not publish listing dates, so items have no \`pubDate\`.
+
+**The exact location is in \`raw.lat\` / \`raw.lng\`, not in the address.** ぶけなび truncates 住所 to the 町 for guests (「東京都新宿区歌舞伎町 ※詳細はお問い合わせください（住所詳細は会員限定）」), but the page's own map pin does not: \`initMap()\` is called with the listing's coordinates, and five 歌舞伎町 listings carry five different pairs spread over roughly 265m × 440m, so these are per-property positions rather than a geocode of the town. They are finer than the 丁目 the address withholds, and no account is needed for them.
 
 \`city\` is a 5-digit JIS X 0402 code and the site pairs it with the prefecture, so both are required — \`/bukenavi/object/kanto/kanagawa/14104\` is 横浜市中区. A code that does not belong to \`pref\` is rejected rather than sent on.
 
